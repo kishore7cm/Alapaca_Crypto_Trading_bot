@@ -115,6 +115,19 @@ def _buy(api: REST, symbol: str, ctx: dict, risk: RiskManager, notifier: Notifie
         symbol, qty, price, take_profit_px, stop_px,
         ctx.get("rsi", 0), ctx.get("adx", 0), ctx.get("bbw", 0),
     )
+    try:
+        from telegram_notifier import send_alert
+        send_alert(
+            f"🚀 <b>BUY ORDER PLACED</b>\n\n"
+            f"  Pair:   <b>{symbol}</b>\n"
+            f"  Entry:  ${price:,.4f}\n"
+            f"  Qty:    {qty:.6f}\n"
+            f"  TP:     ${take_profit_px:,.4f}  <i>(+2.5%)</i>\n"
+            f"  SL:     ${stop_px:,.4f}  <i>(-1.5%)</i>\n"
+            f"  RSI:    {ctx.get('rsi', 0):.1f}   ADX: {ctx.get('adx', 0):.1f}"
+        )
+    except Exception:
+        pass
 
 
 def _latest_price(api: REST, symbol: str) -> float:

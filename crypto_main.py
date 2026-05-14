@@ -20,7 +20,7 @@ from crypto_trader import execute_signals, crypto_position_count
 from risk_manager import RiskManager
 from notifier import Notifier
 from performance import _print_report as report
-from email_notifier import send_daily_summary
+from telegram_notifier import send_daily_summary, send_alert
 from config import CRYPTO_RISK_PCT, MAX_CRYPTO_POSITIONS
 
 logging.basicConfig(
