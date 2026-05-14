@@ -1,14 +1,14 @@
 """
-Daily email summary sent via Gmail SMTP.
+Daily email summary sent via SendGrid API (pure HTTPS — works on Railway).
 Requires two env vars:
-  GMAIL_USER          — your Gmail address (sender = recipient)
-  GMAIL_APP_PASSWORD  — 16-char App Password from Google account settings
+  SENDGRID_API_KEY  — from app.sendgrid.com → Settings → API Keys (free account)
+  GMAIL_USER        — your Gmail address (recipient)
 """
 import os
-import smtplib
+import logging
 from datetime import datetime, timezone
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+
+logger = logging.getLogger(__name__)
 
 from performance import get_summary
 from crypto_data import get_api
@@ -192,43 +192,46 @@ def _build_html(snap: dict, perf: dict) -> str:
 
 
 def send_daily_summary():
-    gmail_user = os.environ.get("GMAIL_USER")
-    gmail_pass = os.environ.get("GMAIL_APP_PASSWORD")
+    sg_key    = os.environ.get("SENDGRID_API_KEY")
+    recipient = os.environ.get("GMAIL_USER")
 
-    if not gmail_user or not gmail_pass:
-        import logging
-        logging.getLogger(__name__).warning(
-            "Email not sent — GMAIL_USER or GMAIL_APP_PASSWORD not set"
-        )
+    if not sg_key:
+        logger.warning("Email skipped — SENDGRID_API_KEY not set")
+        return
+    if not recipient:
+        logger.warning("Email skipped — GMAIL_USER not set")
         return
 
     try:
+        import sendgrid
+        from sendgrid.helpers.mail import Mail
+
         api  = get_api()
         snap = _portfolio_snapshot(api)
         perf = get_summary(days=7)
         html = _build_html(snap, perf)
 
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = (
+        subject = (
             f"Crypto Bot Report — "
             f"Portfolio ${snap['portfolio_value']:,.0f} · "
             f"{perf['total_trades']} trades · "
             f"P&L ${perf['net_pnl_usd']:+,.2f}"
         )
-        msg["From"] = gmail_user
-        msg["To"]   = gmail_user
-        msg.attach(MIMEText(html, "html"))
 
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as smtp:
-            smtp.ehlo()
-            smtp.starttls()
-            smtp.ehlo()
-            smtp.login(gmail_user, gmail_pass)
-            smtp.sendmail(gmail_user, gmail_user, msg.as_string())
+        message = Mail(
+            from_email=recipient,
+            to_emails=recipient,
+            subject=subject,
+            html_content=html,
+        )
 
-        import logging
-        logging.getLogger(__name__).info("Daily summary email sent to %s", gmail_user)
+        sg  = sendgrid.SendGridAPIClient(api_key=sg_key)
+        res = sg.send(message)
+
+        if res.status_code in (200, 202):
+            logger.info("Daily summary email sent to %s (status %d)", recipient, res.status_code)
+        else:
+            logger.error("SendGrid returned status %d: %s", res.status_code, res.body)
 
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error("Failed to send email: %s", e)
+        logger.error("Failed to send email: %s", e)
