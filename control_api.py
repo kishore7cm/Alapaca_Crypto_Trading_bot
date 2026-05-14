@@ -124,9 +124,17 @@ def resume(_=Depends(_auth)):
 
 @app.get("/logs", response_class=PlainTextResponse)
 def logs(n: int = 100, _=Depends(_auth)):
+    """
+    On Railway, logs go to stdout (use railway logs CLI or dashboard).
+    This endpoint reads the local log file if it exists (useful for local runs).
+    """
+    import os
+    log_file = "crypto_bot.log"
+    if not os.path.exists(log_file):
+        return "Logs are in Railway dashboard: railway logs --tail 100\n(File logging not available in cloud — logs go to stdout)"
     try:
         result = subprocess.run(
-            ["tail", f"-{n}", "crypto_bot.log"],
+            ["tail", f"-{n}", log_file],
             capture_output=True, text=True, timeout=5,
         )
         return result.stdout or "(log file is empty)"
@@ -136,15 +144,5 @@ def logs(n: int = 100, _=Depends(_auth)):
 
 @app.get("/performance")
 def performance(days: int = 7, _=Depends(_auth)):
-    import io
-    import sys
-    from performance import report as _report
-
-    buf = io.StringIO()
-    old_stdout = sys.stdout
-    sys.stdout = buf
-    try:
-        _report(days=days)
-    finally:
-        sys.stdout = old_stdout
-    return PlainTextResponse(buf.getvalue())
+    from performance import get_summary
+    return get_summary(days=days)
