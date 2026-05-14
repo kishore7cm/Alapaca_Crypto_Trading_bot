@@ -144,7 +144,7 @@ def logs(n: int = 100, _=Depends(_auth)):
 
 @app.post("/test-email")
 def test_email(_=Depends(_auth)):
-    """Send a test email immediately to verify Gmail credentials are working."""
+    """Trigger a test email in a background thread and return immediately."""
     import os
     gmail_user = os.environ.get("GMAIL_USER")
     gmail_pass = os.environ.get("GMAIL_APP_PASSWORD")
@@ -153,11 +153,11 @@ def test_email(_=Depends(_auth)):
     if not gmail_pass:
         return {"status": "error", "detail": "GMAIL_APP_PASSWORD not set"}
     from email_notifier import send_daily_summary
-    try:
-        send_daily_summary()
-        return {"status": "ok", "message": f"Test email sent to {gmail_user}"}
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
+    threading.Thread(target=send_daily_summary, daemon=True).start()
+    return {
+        "status": "triggered",
+        "message": f"Email sending in background to {gmail_user} — check your inbox in ~15 seconds",
+    }
 
 
 @app.get("/performance")

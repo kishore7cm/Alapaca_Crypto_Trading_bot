@@ -219,7 +219,10 @@ def send_daily_summary():
         msg["To"]   = gmail_user
         msg.attach(MIMEText(html, "html"))
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
             smtp.login(gmail_user, gmail_pass)
             smtp.sendmail(gmail_user, gmail_user, msg.as_string())
 
