@@ -64,7 +64,7 @@ def get_summary(days: int = 7) -> dict:
     api       = get_api()
     portfolio = float(api.get_account().portfolio_value)
     df        = _filled_orders(api, days=days)
-    trades    = _pair_trades(df)
+    trades    = _pair_trades(df) if not df.empty else []
 
     if not trades:
         return {
