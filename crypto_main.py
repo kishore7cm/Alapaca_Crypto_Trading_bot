@@ -20,6 +20,7 @@ from crypto_trader import execute_signals, crypto_position_count
 from risk_manager import RiskManager
 from notifier import Notifier
 from performance import _print_report as report
+from email_notifier import send_daily_summary
 from config import CRYPTO_RISK_PCT, MAX_CRYPTO_POSITIONS
 
 logging.basicConfig(
@@ -87,9 +88,19 @@ def run_daily_report():
 # ── Scheduler thread ──────────────────────────────────────────────────────────
 
 def _start_scheduler():
+    import os
+    # Daily email at 8 PM in user's timezone.
+    # REPORT_TIME_UTC defaults to "00:00" (8 PM EST / midnight UTC).
+    # Override with REPORT_TIME_UTC env var e.g. "20:00" for 8 PM UTC.
+    report_time_utc = os.environ.get("REPORT_TIME_UTC", "00:00")
+
     schedule.every().hour.at(":00").do(run_cycle)
     schedule.every().day.at("00:00").do(run_daily_report)
-    logger.info("Scheduler started — cycling every hour at :00")
+    schedule.every().day.at(report_time_utc).do(send_daily_summary)
+    logger.info(
+        "Scheduler started — trading cycles every hour | email report at %s UTC",
+        report_time_utc,
+    )
     run_cycle()   # run immediately on start
     while True:
         schedule.run_pending()
