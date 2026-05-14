@@ -142,6 +142,24 @@ def logs(n: int = 100, _=Depends(_auth)):
         return f"Error reading log: {e}"
 
 
+@app.post("/test-email")
+def test_email(_=Depends(_auth)):
+    """Send a test email immediately to verify Gmail credentials are working."""
+    import os
+    gmail_user = os.environ.get("GMAIL_USER")
+    gmail_pass = os.environ.get("GMAIL_APP_PASSWORD")
+    if not gmail_user:
+        return {"status": "error", "detail": "GMAIL_USER not set"}
+    if not gmail_pass:
+        return {"status": "error", "detail": "GMAIL_APP_PASSWORD not set"}
+    from email_notifier import send_daily_summary
+    try:
+        send_daily_summary()
+        return {"status": "ok", "message": f"Test email sent to {gmail_user}"}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 @app.get("/performance")
 def performance(days: int = 7, _=Depends(_auth)):
     from performance import get_summary
