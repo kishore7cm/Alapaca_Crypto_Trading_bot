@@ -19,7 +19,7 @@ from crypto_strategy import scan
 from crypto_trader import execute_signals, crypto_position_count
 from risk_manager import RiskManager
 from notifier import Notifier
-from performance import report
+from performance import _print_report as report
 from config import CRYPTO_RISK_PCT, MAX_CRYPTO_POSITIONS
 
 logging.basicConfig(
