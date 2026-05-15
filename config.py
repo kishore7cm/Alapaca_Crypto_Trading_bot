@@ -48,10 +48,17 @@ CRYPTO_ADX_THRESHOLD = 28
 CRYPTO_BB_WIDTH_MIN  = 0.004   # below this = bands too tight, skip
 CRYPTO_BB_WIDTH_MAX  = 0.10    # above this = extreme volatility, skip
 
+# ── Portfolio allocation (33/33/33 split) ────────────────────────────────────
+# Total portfolio ~$118,898 split equally across three strategies.
+# Each bucket gets 33% = ~$39,633.
+CRYPTO_ALLOCATION_PCT = 0.33   # 33% of portfolio reserved for crypto
+
 # ── Crypto risk / money management ───────────────────────────────────────────
-CRYPTO_RISK_PCT       = 0.10   # 10% of portfolio per trade (~$12k on $120k)
-CRYPTO_TAKE_PROFIT    = 0.025  # 2.5% TP — bracket order limit leg
-CRYPTO_STOP_LOSS      = 0.015  # 1.5% SL — bracket order stop leg (R:R = 1.67)
-CRYPTO_MAX_DAILY_LOSS = 0.02   # halt if portfolio down > 2% from day-open value
-MAX_CRYPTO_POSITIONS  = 4      # max concurrent crypto positions
-MAX_POSITIONS         = 20     # global cap (account already holds 13 stock positions)
+# Per-trade sizing: 33% bucket ÷ 4 max positions = 8.33% of full portfolio.
+# At $118,898: 8.33% = ~$9,904/trade. 4 trades × $9,904 = ~$39,616 ≈ full bucket.
+CRYPTO_RISK_PCT       = 0.0833  # 8.33% of full portfolio per trade
+CRYPTO_TAKE_PROFIT    = 0.025   # 2.5% TP — bracket order limit leg
+CRYPTO_STOP_LOSS      = 0.015   # 1.5% SL — bracket order stop leg (R:R = 1.67)
+CRYPTO_MAX_DAILY_LOSS = 0.02    # halt if crypto bucket down > 2% from day-open
+MAX_CRYPTO_POSITIONS  = 4       # 4 positions × 8.33% = 33% max deployed
+MAX_POSITIONS         = 20      # global cap across all strategies
