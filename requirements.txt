@@ -1,7 +1,8 @@
 alpaca-trade-api>=3.2.0
+alpaca-py>=0.29.0
 pandas>=2.0.0
 numpy>=1.26.0
 schedule>=1.2.0
 fastapi>=0.111.0
 uvicorn>=0.29.0
-sendgrid>=6.11.0
+requests>=2.31.0
