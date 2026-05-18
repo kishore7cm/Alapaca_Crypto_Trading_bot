@@ -85,6 +85,13 @@ def _buy(api: REST, symbol: str, ctx: dict, risk: RiskManager, notifier: Notifie
         notifier.order_skipped(symbol, "risk check failed")
         return
 
+    # Gate 6 — news sentiment: skip if bad news in last 4 hours
+    from news_filter import is_safe_to_trade
+    safe, headline = is_safe_to_trade(symbol)
+    if not safe:
+        notifier.order_skipped(symbol, f"bad news detected: {headline[:60]}")
+        return
+
     price   = ctx.get("close") or _latest_price(api, symbol)
     dollars = risk.trade_dollar_amount()
 
