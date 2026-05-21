@@ -9,6 +9,9 @@ from config import (
     MAX_CRYPTO_POSITIONS, CRYPTO_MAX_DAILY_LOSS,
 )
 
+# Alpaca crypto minimum price gap between entry and TP limit price
+_ALPACA_MIN_TP_GAP = 0.01
+
 logger = logging.getLogger(__name__)
 
 MIN_NOTIONAL = 5.0
@@ -99,27 +102,39 @@ def _buy(api: REST, symbol: str, ctx: dict, risk: RiskManager, notifier: Notifie
         notifier.order_skipped(symbol, f"trade amount ${dollars:.2f} below minimum")
         return
 
-    qty            = round(dollars / price, 6)
-    take_profit_px = round(price * (1 + CRYPTO_TAKE_PROFIT), 4)
+    qty = round(dollars / price, 6)
+    # Ensure TP is at least $0.01 above entry — Alpaca crypto minimum gap
+    take_profit_px = max(round(price * (1 + CRYPTO_TAKE_PROFIT), 4), round(price + _ALPACA_MIN_TP_GAP, 4))
     stop_px        = round(price * (1 - CRYPTO_STOP_LOSS), 4)
+    tp_pct         = (take_profit_px / price - 1) * 100
 
-    # Bracket order: market entry + limit take-profit + stop-loss.
-    # Both exit legs live at the exchange — zero polling required.
+    # Alpaca crypto does not support bracket/OCO orders — place market buy then
+    # a separate GTC limit sell for the TP leg. SL is enforced in manage_exits().
     api.submit_order(
         symbol=alpaca_sym,
         qty=qty,
         side="buy",
         type="market",
         time_in_force="gtc",
-        order_class="bracket",
-        take_profit={"limit_price": str(take_profit_px)},
-        stop_loss={"stop_price": str(stop_px)},
     )
+
+    try:
+        api.submit_order(
+            symbol=alpaca_sym,
+            qty=qty,
+            side="sell",
+            type="limit",
+            time_in_force="gtc",
+            limit_price=str(take_profit_px),
+        )
+    except Exception as tp_err:
+        logger.warning("TP limit order failed for %s: %s — SL-only mode", symbol, tp_err)
+
     notifier.order_placed(symbol, "buy", qty, price)
     logger.info(
-        "BUY %s | qty=%.6f | entry≈%.4f | TP=%.4f (+2.5%%) | SL=%.4f (-1.5%%) "
+        "BUY %s | qty=%.6f | entry≈%.4f | TP=%.4f (+%.1f%%) | SL=%.4f (-1.5%%) "
         "| RSI=%.1f | ADX=%.1f | BBW=%.4f",
-        symbol, qty, price, take_profit_px, stop_px,
+        symbol, qty, price, take_profit_px, tp_pct, stop_px,
         ctx.get("rsi", 0), ctx.get("adx", 0), ctx.get("bbw", 0),
     )
     try:
@@ -129,12 +144,64 @@ def _buy(api: REST, symbol: str, ctx: dict, risk: RiskManager, notifier: Notifie
             f"  Pair:   <b>{symbol}</b>\n"
             f"  Entry:  ${price:,.4f}\n"
             f"  Qty:    {qty:.6f}\n"
-            f"  TP:     ${take_profit_px:,.4f}  <i>(+2.5%)</i>\n"
+            f"  TP:     ${take_profit_px:,.4f}  <i>(+{tp_pct:.1f}%)</i>\n"
             f"  SL:     ${stop_px:,.4f}  <i>(-1.5%)</i>\n"
             f"  RSI:    {ctx.get('rsi', 0):.1f}   ADX: {ctx.get('adx', 0):.1f}"
         )
     except Exception:
         pass
+
+
+def manage_exits(api: REST, notifier: Notifier):
+    """Enforce stop-loss on open crypto positions each cycle.
+
+    Called because Alpaca crypto does not support bracket/OCO orders — the TP
+    leg is a standalone limit sell already at the exchange; the SL leg must be
+    polled here and fired as a market sell when breached.
+    """
+    for pos in api.list_positions():
+        if pos.symbol not in _CRYPTO_SYMS:
+            continue
+        symbol    = pos.symbol[:-3] + "/USD"   # "BTCUSD" → "BTC/USD"
+        entry_px  = float(pos.avg_entry_price)
+        cur_px    = float(pos.current_price)
+        pnl_pct   = (cur_px - entry_px) / entry_px
+
+        if pnl_pct <= -CRYPTO_STOP_LOSS:
+            logger.warning(
+                "SL HIT %s | entry=%.4f | now=%.4f | P&L=%.2f%%",
+                symbol, entry_px, cur_px, pnl_pct * 100,
+            )
+            for order in api.list_orders(status="open"):
+                if order.symbol == pos.symbol and order.side == "sell":
+                    try:
+                        api.cancel_order(order.id)
+                        logger.info("Cancelled TP order %s for %s", order.id, symbol)
+                    except Exception as e:
+                        logger.warning("Failed to cancel TP order %s: %s", order.id, e)
+            try:
+                api.submit_order(
+                    symbol=pos.symbol,
+                    qty=abs(float(pos.qty)),
+                    side="sell",
+                    type="market",
+                    time_in_force="gtc",
+                )
+                notifier.order_placed(symbol, "sell (stop-loss)", abs(float(pos.qty)), cur_px)
+                logger.info("SL SELL %s | qty=%s | price=%.4f", symbol, pos.qty, cur_px)
+                try:
+                    from telegram_notifier import send_alert
+                    send_alert(
+                        f"🛑 <b>STOP-LOSS TRIGGERED</b>\n\n"
+                        f"  Pair:   <b>{symbol}</b>\n"
+                        f"  Entry:  ${entry_px:,.4f}\n"
+                        f"  Exit:   ${cur_px:,.4f}\n"
+                        f"  P&L:    {pnl_pct*100:.2f}%"
+                    )
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error("SL market sell failed for %s: %s", symbol, e)
 
 
 def _latest_price(api: REST, symbol: str) -> float:

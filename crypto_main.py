@@ -13,7 +13,7 @@ import uvicorn
 
 from crypto_data import get_api, fetch_crypto_bars
 from crypto_strategy import scan
-from crypto_trader import execute_signals, crypto_position_count
+from crypto_trader import execute_signals, crypto_position_count, manage_exits
 from risk_manager import RiskManager
 from notifier import Notifier
 from performance import _print_report as report
@@ -62,8 +62,10 @@ def run_cycle(trigger: str = "scheduled"):
             n_pos, MAX_CRYPTO_POSITIONS, trigger,
         )
 
+        manage_exits(api, notifier)
+
         if n_pos >= MAX_CRYPTO_POSITIONS:
-            logger.info("Slots full — waiting for bracket orders to close")
+            logger.info("Slots full — monitoring exits")
             notifier.cycle_end("CRYPTO")
             return
 
