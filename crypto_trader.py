@@ -59,9 +59,34 @@ def _daily_loss_breached(api: REST) -> bool:
 
 # ── Order execution ───────────────────────────────────────────────────────────
 
+def _btc_bearish_regime(signals: dict) -> tuple[bool, str]:
+    """Return (True, reason) if BTC is below its 20-bar MA and trending (ADX > 25).
+    Uses the BTC/USD context already computed by scan() — no extra API call needed."""
+    btc = signals.get("BTC/USD")
+    if not btc:
+        return False, ""
+    _, ctx = btc
+    close = ctx.get("close", 0)
+    ma    = ctx.get("ma", float("inf"))
+    adx   = ctx.get("adx", 0)
+    if close < ma and adx > 25:
+        return True, f"BTC below MA ({close:,.0f} < {ma:,.0f}), ADX={adx:.1f}"
+    return False, ""
+
+
 def execute_signals(api: REST, signals: dict, risk: RiskManager, notifier: Notifier):
     if _daily_loss_breached(api):
         notifier.order_skipped("ALL", "daily loss limit hit — trading halted for today")
+        return
+
+    bearish, reason = _btc_bearish_regime(signals)
+    if bearish:
+        logger.info("BTC REGIME FILTER blocked all entries — %s", reason)
+        try:
+            from telegram_notifier import send_alert
+            send_alert(f"🚫 <b>BTC Regime Filter Active</b>\n  {reason}\n  All new entries blocked this cycle.")
+        except Exception:
+            pass
         return
 
     for symbol, (signal, ctx) in signals.items():
