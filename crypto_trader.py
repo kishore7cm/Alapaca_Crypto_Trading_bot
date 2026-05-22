@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import date
 from alpaca_trade_api.rest import REST
 
@@ -11,6 +12,19 @@ from config import (
 
 # Alpaca crypto minimum price gap between entry and TP limit price
 _ALPACA_MIN_TP_GAP = 0.01
+
+# Per-symbol SL cooldown: block re-entry for this many hours after a stop-loss exit
+SL_COOLDOWN_HOURS = 4
+_sl_cooldown: dict[str, float] = {}   # symbol → monotonic time of last SL exit
+
+
+def _in_sl_cooldown(symbol: str) -> bool:
+    return (time.monotonic() - _sl_cooldown.get(symbol, 0)) < SL_COOLDOWN_HOURS * 3600
+
+
+def _set_sl_cooldown(symbol: str) -> None:
+    _sl_cooldown[symbol] = time.monotonic()
+    logger.info("SL cooldown set for %s — no re-entry for %dh", symbol, SL_COOLDOWN_HOURS)
 
 logger = logging.getLogger(__name__)
 
@@ -59,34 +73,9 @@ def _daily_loss_breached(api: REST) -> bool:
 
 # ── Order execution ───────────────────────────────────────────────────────────
 
-def _btc_bearish_regime(signals: dict) -> tuple[bool, str]:
-    """Return (True, reason) if BTC is below its 20-bar MA and trending (ADX > 25).
-    Uses the BTC/USD context already computed by scan() — no extra API call needed."""
-    btc = signals.get("BTC/USD")
-    if not btc:
-        return False, ""
-    _, ctx = btc
-    close = ctx.get("close", 0)
-    ma    = ctx.get("ma", float("inf"))
-    adx   = ctx.get("adx", 0)
-    if close < ma and adx > 25:
-        return True, f"BTC below MA ({close:,.0f} < {ma:,.0f}), ADX={adx:.1f}"
-    return False, ""
-
-
 def execute_signals(api: REST, signals: dict, risk: RiskManager, notifier: Notifier):
     if _daily_loss_breached(api):
         notifier.order_skipped("ALL", "daily loss limit hit — trading halted for today")
-        return
-
-    bearish, reason = _btc_bearish_regime(signals)
-    if bearish:
-        logger.info("BTC REGIME FILTER blocked all entries — %s", reason)
-        try:
-            from telegram_notifier import send_alert
-            send_alert(f"🚫 <b>BTC Regime Filter Active</b>\n  {reason}\n  All new entries blocked this cycle.")
-        except Exception:
-            pass
         return
 
     for symbol, (signal, ctx) in signals.items():
@@ -100,6 +89,10 @@ def execute_signals(api: REST, signals: dict, risk: RiskManager, notifier: Notif
 def _buy(api: REST, symbol: str, ctx: dict, risk: RiskManager, notifier: Notifier):
     alpaca_sym = symbol.replace("/", "")
 
+    if _in_sl_cooldown(symbol):
+        remaining = SL_COOLDOWN_HOURS - (time.monotonic() - _sl_cooldown[symbol]) / 3600
+        notifier.order_skipped(symbol, f"SL cooldown active — {remaining:.1f}h remaining")
+        return
     if risk.already_holding(symbol):
         notifier.order_skipped(symbol, "already holding position")
         return
@@ -214,6 +207,7 @@ def manage_exits(api: REST, notifier: Notifier):
                 )
                 notifier.order_placed(symbol, "sell (stop-loss)", abs(float(pos.qty)), cur_px)
                 logger.info("SL SELL %s | qty=%s | price=%.4f", symbol, pos.qty, cur_px)
+                _set_sl_cooldown(symbol)
                 try:
                     from telegram_notifier import send_alert
                     send_alert(

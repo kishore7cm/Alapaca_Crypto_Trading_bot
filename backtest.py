@@ -32,8 +32,8 @@ PORTFOLIO         = 121_650.0
 TRADE_SIZE        = PORTFOLIO * CRYPTO_RISK_PCT   # ~$10,133 per trade
 WINDOWS           = [7, 30, 60]
 WARMUP_BARS       = 55           # max(BB=48, RSI=14, ADX=14) + buffer
-BTC_REGIME_ADX    = 25           # Option 2: ADX threshold for BTC bearish regime filter
-DAILY_LOSS_HALT   = 0.0075       # Option 4: halt after 0.75% daily portfolio loss
+SL_COOLDOWN_HOURS = 4            # block re-entry N hours after a stop-loss on that symbol
+DAILY_LOSS_HALT   = 0.0075       # halt after 0.75% daily portfolio loss
 
 
 def _fetch(api, symbol: str) -> pd.DataFrame:
@@ -58,19 +58,19 @@ def _fetch(api, symbol: str) -> pd.DataFrame:
     })[["Open", "High", "Low", "Close", "Volume"]]
 
 
-def _backtest_symbol(symbol: str, df: pd.DataFrame, btc_df: pd.DataFrame | None) -> list[dict]:
-    """Walk forward bar-by-bar with BTC regime filter and daily loss halt."""
+def _backtest_symbol(symbol: str, df: pd.DataFrame) -> list[dict]:
+    """Walk forward bar-by-bar with per-symbol SL cooldown and daily loss halt."""
     df  = add_indicators(df)
-    btc = add_indicators(btc_df) if btc_df is not None and not btc_df.empty else None
 
-    pos        = None
-    trades     = []
-    daily_loss = {}   # date → cumulative loss USD that day
+    pos           = None
+    trades        = []
+    daily_loss    = {}   # date → cumulative loss USD that day
+    sl_cooldown_until = None   # timestamp after which re-entry is allowed
 
     for i in range(WARMUP_BARS, len(df)):
         row  = df.iloc[i]
         ts   = df.index[i]
-        date = ts.date()
+        day  = ts.date()
 
         # ── Check exit ────────────────────────────────────────────────────────
         if pos is not None:
@@ -82,7 +82,9 @@ def _backtest_symbol(symbol: str, df: pd.DataFrame, btc_df: pd.DataFrame | None)
                 exit_reason = "SL"      if sl_hit else "TP"
                 pnl_pct     = (exit_price - pos["entry_price"]) / pos["entry_price"]
                 pnl_usd     = TRADE_SIZE * pnl_pct
-                daily_loss[date] = daily_loss.get(date, 0) + min(pnl_usd, 0)
+                daily_loss[day] = daily_loss.get(day, 0) + min(pnl_usd, 0)
+                if exit_reason == "SL":
+                    sl_cooldown_until = ts + pd.Timedelta(hours=SL_COOLDOWN_HOURS)
                 trades.append({
                     "symbol":      symbol,
                     "entry_bar":   pos["entry_bar"],
@@ -94,23 +96,17 @@ def _backtest_symbol(symbol: str, df: pd.DataFrame, btc_df: pd.DataFrame | None)
                     "pnl_usd":     pnl_usd,
                     "rsi_entry":   pos["rsi"],
                     "adx_entry":   pos["adx"],
-                    "blocked_by":  "",
                 })
                 pos = None
 
         # ── Check entry ───────────────────────────────────────────────────────
         if pos is None:
-            # Option 4: daily loss halt
-            if abs(daily_loss.get(date, 0)) / PORTFOLIO >= DAILY_LOSS_HALT:
+            # Daily loss halt (0.75% of portfolio)
+            if abs(daily_loss.get(day, 0)) / PORTFOLIO >= DAILY_LOSS_HALT:
                 continue
-
-            # Option 2: BTC bearish regime filter
-            if btc is not None and ts in btc.index:
-                bi = btc.index.get_loc(ts)
-                if bi >= WARMUP_BARS:
-                    brow = btc.iloc[bi]
-                    if brow["Close"] < brow["MA"] and brow["ADX"] > BTC_REGIME_ADX:
-                        continue
+            # Per-symbol SL cooldown
+            if sl_cooldown_until is not None and ts < sl_cooldown_until:
+                continue
 
             below_lower  = row["Close"]  < row["Lower"]
             rsi_oversold = row["RSI"]    < CRYPTO_RSI_OVERSOLD
@@ -158,9 +154,7 @@ def _summarise(all_trades: list[dict], window_days: int) -> dict:
 def main():
     api = get_api()
     print(f"\nFetching {LOOKBACK_DAYS} days of hourly data for {len(CRYPTO_SYMBOLS)} pairs …")
-    print(f"Filters: BTC regime (ADX>{BTC_REGIME_ADX}) + daily loss halt ({DAILY_LOSS_HALT*100:.2f}%)\n")
-
-    btc_df = _fetch(api, "BTC/USD")
+    print(f"Filters: SL cooldown ({SL_COOLDOWN_HOURS}h per symbol) + daily loss halt ({DAILY_LOSS_HALT*100:.2f}%)\n")
 
     all_trades = []
     for symbol in CRYPTO_SYMBOLS:
@@ -169,7 +163,7 @@ def main():
         if df.empty or len(df) < WARMUP_BARS + 10:
             print("SKIP (insufficient data)")
             continue
-        trades = _backtest_symbol(symbol, df, btc_df if symbol != "BTC/USD" else None)
+        trades = _backtest_symbol(symbol, df)
         wins   = sum(1 for t in trades if t["pnl_usd"] > 0)
         print(f"{len(trades):3d} trades  {wins}W/{len(trades)-wins}L  "
               f"net ${sum(t['pnl_usd'] for t in trades):+,.0f}")
