@@ -58,7 +58,7 @@ CRYPTO_ALLOCATION_PCT = 0.33   # 33% of portfolio reserved for crypto
 # At $118,898: 8.33% = ~$9,904/trade. 4 trades × $9,904 = ~$39,616 ≈ full bucket.
 CRYPTO_RISK_PCT       = 0.0833  # 8.33% of full portfolio per trade
 CRYPTO_TAKE_PROFIT    = 0.025   # 2.5% TP — bracket order limit leg
-CRYPTO_STOP_LOSS      = 0.015   # 1.5% SL — bracket order stop leg (R:R = 1.67)
+CRYPTO_STOP_LOSS      = 0.020   # 2.0% SL — backtest-validated (46% WR vs 32.8% at 1.5%)
 CRYPTO_MAX_DAILY_LOSS = 0.0075  # halt if crypto bucket down > 0.75% from day-open
 MAX_CRYPTO_POSITIONS  = 4       # 4 positions × 8.33% = 33% max deployed
 MAX_POSITIONS         = 20      # global cap across all strategies

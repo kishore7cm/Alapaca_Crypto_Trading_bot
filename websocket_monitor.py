@@ -58,6 +58,7 @@ class WebSocketMonitor:
     def _thread_target(self):
         from alpaca.data.live import CryptoDataStream
 
+        delay = 20
         while self._running:
             try:
                 stream = CryptoDataStream(
@@ -69,11 +70,13 @@ class WebSocketMonitor:
                     "WebSocket connected — watching %d pairs for >%.1f%% drops",
                     len(CRYPTO_SYMBOLS), TRIGGER_DROP_PCT,
                 )
+                delay = 20  # reset backoff on successful connection
                 stream.run()
             except Exception as e:
                 if self._running:
-                    logger.warning("WebSocket dropped: %s — reconnecting in 20s", e)
-                    time.sleep(20)
+                    logger.warning("WebSocket dropped: %s — reconnecting in %ds", e, delay)
+                    time.sleep(delay)
+                    delay = min(delay * 2, 300)  # exponential backoff, cap at 5min
 
     def start(self):
         self._running = True

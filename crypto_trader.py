@@ -19,7 +19,10 @@ _sl_cooldown: dict[str, float] = {}   # symbol → monotonic time of last SL exi
 
 
 def _in_sl_cooldown(symbol: str) -> bool:
-    return (time.monotonic() - _sl_cooldown.get(symbol, 0)) < SL_COOLDOWN_HOURS * 3600
+    last_sl = _sl_cooldown.get(symbol)
+    if last_sl is None:
+        return False
+    return (time.monotonic() - last_sl) < SL_COOLDOWN_HOURS * 3600
 
 
 def _set_sl_cooldown(symbol: str) -> None:
@@ -43,8 +46,12 @@ def crypto_position_count(api: REST) -> int:
     return sum(1 for p in api.list_positions() if p.symbol in _CRYPTO_SYMS)
 
 
+def _normalize_sym(sym: str) -> str:
+    return sym.replace("/", "")
+
+
 def _has_pending_order(api: REST, alpaca_sym: str) -> bool:
-    return any(o.symbol == alpaca_sym for o in api.list_orders(status="open"))
+    return any(_normalize_sym(o.symbol) == alpaca_sym for o in api.list_orders(status="open"))
 
 
 def _daily_loss_breached(api: REST) -> bool:
@@ -128,7 +135,7 @@ def _buy(api: REST, symbol: str, ctx: dict, risk: RiskManager, notifier: Notifie
 
     # Alpaca crypto does not support bracket/OCO orders — place market buy then
     # a separate GTC limit sell for the TP leg. SL is enforced in manage_exits().
-    api.submit_order(
+    buy_order = api.submit_order(
         symbol=alpaca_sym,
         qty=qty,
         side="buy",
@@ -136,23 +143,39 @@ def _buy(api: REST, symbol: str, ctx: dict, risk: RiskManager, notifier: Notifie
         time_in_force="gtc",
     )
 
+    # Alpaca deducts the trading fee from received crypto (~0.25%), so the position
+    # qty is less than the ordered qty. Poll until filled, then use the actual
+    # position qty for the TP sell to avoid "insufficient qty" rejections.
+    tp_qty = qty
+    try:
+        for _ in range(10):
+            time.sleep(1)
+            o = api.get_order(buy_order.id)
+            if o.status == "filled":
+                pos = api.get_position(alpaca_sym)
+                tp_qty = abs(float(pos.qty))
+                break
+    except Exception as poll_err:
+        logger.warning("TP qty poll failed for %s: %s — using calculated qty", symbol, poll_err)
+
     try:
         api.submit_order(
             symbol=alpaca_sym,
-            qty=qty,
+            qty=tp_qty,
             side="sell",
             type="limit",
             time_in_force="gtc",
             limit_price=str(take_profit_px),
         )
+        logger.info("TP limit order placed for %s | qty=%.6f | limit=%.4f", symbol, tp_qty, take_profit_px)
     except Exception as tp_err:
         logger.warning("TP limit order failed for %s: %s — SL-only mode", symbol, tp_err)
 
     notifier.order_placed(symbol, "buy", qty, price)
     logger.info(
-        "BUY %s | qty=%.6f | entry≈%.4f | TP=%.4f (+%.1f%%) | SL=%.4f (-1.5%%) "
+        "BUY %s | qty=%.6f | entry≈%.4f | TP=%.4f (+%.1f%%) | SL=%.4f (-%.1f%%) "
         "| RSI=%.1f | ADX=%.1f | BBW=%.4f",
-        symbol, qty, price, take_profit_px, tp_pct, stop_px,
+        symbol, qty, price, take_profit_px, tp_pct, stop_px, CRYPTO_STOP_LOSS * 100,
         ctx.get("rsi", 0), ctx.get("adx", 0), ctx.get("bbw", 0),
     )
     try:
@@ -170,12 +193,25 @@ def _buy(api: REST, symbol: str, ctx: dict, risk: RiskManager, notifier: Notifie
         pass
 
 
+def _open_sell_qty(api: REST, alpaca_sym: str) -> float:
+    """Return total qty of open sell orders for a symbol (0.0 if none)."""
+    return sum(
+        float(o.qty)
+        for o in api.list_orders(status="open")
+        if _normalize_sym(o.symbol) == alpaca_sym and o.side == "sell"
+    )
+
+
 def manage_exits(api: REST, notifier: Notifier):
     """Enforce stop-loss on open crypto positions each cycle.
 
     Called because Alpaca crypto does not support bracket/OCO orders — the TP
     leg is a standalone limit sell already at the exchange; the SL leg must be
     polled here and fired as a market sell when breached.
+
+    Also recovers missing TP orders: if a position has no open sell order
+    (e.g. the original TP submission failed due to fee-reduced qty), a new
+    GTC limit sell is placed at entry_price * (1 + CRYPTO_TAKE_PROFIT).
     """
     for pos in api.list_positions():
         if pos.symbol not in _CRYPTO_SYMS:
@@ -184,6 +220,29 @@ def manage_exits(api: REST, notifier: Notifier):
         entry_px  = float(pos.avg_entry_price)
         cur_px    = float(pos.current_price)
         pnl_pct   = (cur_px - entry_px) / entry_px
+
+        # Recovery: place a TP limit sell if no open sell order exists
+        if _open_sell_qty(api, pos.symbol) == 0.0:
+            tp_px  = max(
+                round(entry_px * (1 + CRYPTO_TAKE_PROFIT), 4),
+                round(entry_px + _ALPACA_MIN_TP_GAP, 4),
+            )
+            pos_qty = abs(float(pos.qty))
+            try:
+                api.submit_order(
+                    symbol=pos.symbol,
+                    qty=pos_qty,
+                    side="sell",
+                    type="limit",
+                    time_in_force="gtc",
+                    limit_price=str(tp_px),
+                )
+                logger.info(
+                    "TP RECOVERY %s | qty=%.6f | limit=%.4f (+%.1f%%)",
+                    symbol, pos_qty, tp_px, CRYPTO_TAKE_PROFIT * 100,
+                )
+            except Exception as e:
+                logger.warning("TP recovery failed for %s: %s", symbol, e)
 
         if pnl_pct <= -CRYPTO_STOP_LOSS:
             logger.warning(
