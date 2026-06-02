@@ -250,7 +250,7 @@ def manage_exits(api: REST, notifier: Notifier):
                 symbol, entry_px, cur_px, pnl_pct * 100,
             )
             for order in api.list_orders(status="open"):
-                if order.symbol == pos.symbol and order.side == "sell":
+                if _normalize_sym(order.symbol) == pos.symbol and order.side == "sell":
                     try:
                         api.cancel_order(order.id)
                         logger.info("Cancelled TP order %s for %s", order.id, symbol)
