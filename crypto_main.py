@@ -148,6 +148,11 @@ def _start_api():
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import os
+    if not os.environ.get("CRYPTO_ENABLED", "").lower() == "true":
+        logger.info("Crypto bot DISABLED (set CRYPTO_ENABLED=true to re-enable). Exiting.")
+        raise SystemExit(0)
+
     logger.info(
         "Crypto bot v3 | 10 pairs | BB(48)+RSI+ADX+News | "
         "Bracket orders TP=+2.5%% SL=-1.5%% | WebSocket real-time"
